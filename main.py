@@ -90,6 +90,7 @@ async def metrics(
         },
         {
             "$addFields": {
+                "callCount": {"$size": "$calls"},
                 "hasCalled": {"$gt": [{"$size": "$calls"}, 0]},
                 "latestOutcome": {
                     "$let": {
@@ -116,6 +117,11 @@ async def metrics(
                             "leadsWithCalls": {
                                 "$sum": {"$cond": ["$hasCalled", 1, 0]}
                             },
+                            # Sum of every call attempt, not deduped by lead —
+                            # this is what surfaces leads that got called
+                            # more than once.
+                            "totalCallAttempts": {"$sum": "$callCount"},
+                            "maxCallsOnLead": {"$max": "$callCount"},
                         }
                     }
                 ],
@@ -128,6 +134,26 @@ async def metrics(
                         }
                     },
                 ],
+                # Histogram of leads by how many times each was called —
+                # this is what shows the "multiple calls for a single lead"
+                # pattern instead of collapsing it into a single boolean.
+                "callDistribution": [
+                    {
+                        "$group": {
+                            "_id": {
+                                "$switch": {
+                                    "branches": [
+                                        {"case": {"$eq": ["$callCount", 0]}, "then": "0"},
+                                        {"case": {"$eq": ["$callCount", 1]}, "then": "1"},
+                                        {"case": {"$eq": ["$callCount", 2]}, "then": "2"},
+                                    ],
+                                    "default": "3+",
+                                }
+                            },
+                            "count": {"$sum": 1},
+                        }
+                    }
+                ],
             }
         },
     ]
@@ -137,17 +163,30 @@ async def metrics(
     totals = result["totals"][0] if result["totals"] else None
     total_leads = totals["totalLeads"] if totals else 0
     leads_with_calls = totals["leadsWithCalls"] if totals else 0
+    total_call_attempts = totals["totalCallAttempts"] if totals else 0
+    max_calls_on_lead = totals["maxCallsOnLead"] if totals else 0
 
     connect_rate_pct = (
         round(leads_with_calls / total_leads * 100, 1) if total_leads else 0
     )
+    avg_calls_per_contacted_lead = (
+        round(total_call_attempts / leads_with_calls, 2) if leads_with_calls else 0
+    )
 
     outcome_breakdown = {row["_id"]: row["count"] for row in result["outcomes"]}
+
+    calls_per_lead_distribution = {"0": 0, "1": 0, "2": 0, "3+": 0}
+    for row in result["callDistribution"]:
+        calls_per_lead_distribution[row["_id"]] = row["count"]
 
     return {
         "totalLeads": total_leads,
         "leadsWithCalls": leads_with_calls,
         "leadsWithNoCall": total_leads - leads_with_calls,
         "connectRatePct": connect_rate_pct,
+        "totalCallAttempts": total_call_attempts,
+        "avgCallsPerContactedLead": avg_calls_per_contacted_lead,
+        "maxCallsOnLead": max_calls_on_lead,
+        "callsPerLeadDistribution": calls_per_lead_distribution,
         "outcomeBreakdown": outcome_breakdown,
     }
