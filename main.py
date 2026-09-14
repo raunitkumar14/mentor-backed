@@ -92,6 +92,19 @@ async def metrics(
             "$addFields": {
                 "callCount": {"$size": "$calls"},
                 "hasCalled": {"$gt": [{"$size": "$calls"}, 0]},
+                # duration is in seconds and is null for calls that never
+                # connected (no_answer/missed/rejected) — $sum over the
+                # array skips those nulls rather than erroring.
+                "callDurationSum": {"$sum": "$calls.duration"},
+                "callsWithDuration": {
+                    "$size": {
+                        "$filter": {
+                            "input": "$calls",
+                            "as": "c",
+                            "cond": {"$ne": ["$$c.duration", None]},
+                        }
+                    }
+                },
                 "latestOutcome": {
                     "$let": {
                         "vars": {
@@ -122,6 +135,8 @@ async def metrics(
                             # more than once.
                             "totalCallAttempts": {"$sum": "$callCount"},
                             "maxCallsOnLead": {"$max": "$callCount"},
+                            "totalCallDurationSec": {"$sum": "$callDurationSum"},
+                            "callsWithDuration": {"$sum": "$callsWithDuration"},
                         }
                     }
                 ],
@@ -165,12 +180,19 @@ async def metrics(
     leads_with_calls = totals["leadsWithCalls"] if totals else 0
     total_call_attempts = totals["totalCallAttempts"] if totals else 0
     max_calls_on_lead = totals["maxCallsOnLead"] if totals else 0
+    total_call_duration_sec = totals["totalCallDurationSec"] if totals else 0
+    calls_with_duration = totals["callsWithDuration"] if totals else 0
 
     connect_rate_pct = (
         round(leads_with_calls / total_leads * 100, 1) if total_leads else 0
     )
     avg_calls_per_contacted_lead = (
         round(total_call_attempts / leads_with_calls, 2) if leads_with_calls else 0
+    )
+    avg_call_duration_sec = (
+        round(total_call_duration_sec / calls_with_duration, 1)
+        if calls_with_duration
+        else 0
     )
 
     outcome_breakdown = {row["_id"]: row["count"] for row in result["outcomes"]}
@@ -187,6 +209,8 @@ async def metrics(
         "totalCallAttempts": total_call_attempts,
         "avgCallsPerContactedLead": avg_calls_per_contacted_lead,
         "maxCallsOnLead": max_calls_on_lead,
+        "totalCallDurationSec": total_call_duration_sec,
+        "avgCallDurationSec": avg_call_duration_sec,
         "callsPerLeadDistribution": calls_per_lead_distribution,
         "outcomeBreakdown": outcome_breakdown,
     }
