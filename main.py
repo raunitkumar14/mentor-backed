@@ -105,19 +105,6 @@ async def metrics(
                         }
                     }
                 },
-                "latestOutcome": {
-                    "$let": {
-                        "vars": {
-                            "sortedCalls": {
-                                "$sortArray": {
-                                    "input": "$calls",
-                                    "sortBy": {"createdAt": -1},
-                                }
-                            }
-                        },
-                        "in": {"$arrayElemAt": ["$$sortedCalls.outcome", 0]},
-                    }
-                },
             }
         },
         {
@@ -140,11 +127,14 @@ async def metrics(
                         }
                     }
                 ],
+                # Every individual call attempt's outcome — this sums to
+                # totalCallAttempts, not leadsWithCalls, so a lead called
+                # 3 times contributes 3 outcomes here, not 1.
                 "outcomes": [
-                    {"$match": {"hasCalled": True}},
+                    {"$unwind": "$calls"},
                     {
                         "$group": {
-                            "_id": {"$ifNull": ["$latestOutcome", "unknown"]},
+                            "_id": {"$ifNull": ["$calls.outcome", "unknown"]},
                             "count": {"$sum": 1},
                         }
                     },
